@@ -223,3 +223,104 @@ class TryTesting(TestCase):
         )
 
         self.assertTrue(any(result_test.flatten().tolist()))
+
+
+def BloatWareCursedTranspConv2d(
+    matrix,
+    in_channels,
+    out_channels,
+    kernel_size,
+    transp_stride=1,
+    padding=0,
+    dilation=1,
+    bias=True,
+    padding_mode="zeros",
+):
+    stride = 1
+
+    # добавление отступов и padding в входной матрице
+    pad = kernel_size - 1
+    result_matrix = []
+    for matr in matrix:
+        zero_tensor = np.zeros(
+            (
+                ((matr.shape[0] - 1) * (transp_stride) + 1),
+                ((matr.shape[1] - 1) * (transp_stride) + 1),
+            )
+        )
+        for a in range(0, zero_tensor.shape[0], transp_stride):
+            for b in range(0, zero_tensor.shape[1], transp_stride):
+                zero_tensor[a][b] = matr[a // (transp_stride)][b // (transp_stride)]
+
+        pad_matr = np.pad(zero_tensor, pad_width=pad, mode="constant")
+        result_matrix.append(pad_matr)
+    matrix = torch.tensor(result_matrix)
+
+    # генерация bias
+    if bias == True:
+        bias_val = torch.rand(out_channels)
+    else:
+        bias_val = torch.zeros(out_channels)
+
+    # padding_mode
+    if padding_mode == "zeros":
+        pad = torch.nn.ZeroPad2d(padding)
+        matrix = pad(matrix)
+    if padding_mode == "reflect":
+        pad = torch.nn.ReflectionPad2d(padding)
+        matrix = pad(matrix)
+    if padding_mode == "replicate":
+        pad = torch.nn.ReplicationPad2d(padding)
+        matrix = pad(matrix)
+    if padding_mode == "circular":
+        pad = torch.nn.CircularPad2d(padding)
+        matrix = pad(matrix)
+
+    # генерация ядра
+    filter = np.array(torch.rand(out_channels, in_channels, kernel_size, kernel_size))
+
+    # инвертирование ядра для ConvTranspose2d
+    filter_for_transpose = []
+    for j in range(out_channels):
+        filter_in = []
+        for i in range(in_channels):
+            filter_in.append(np.flip(np.array(filter[j][i])))
+        filter_for_transpose.append(filter_in)
+
+    filter_for_transpose = torch.tensor(filter_for_transpose)
+    filter_for_transpose = filter_for_transpose.reshape(
+        in_channels, out_channels, kernel_size, kernel_size
+    )
+
+    result = []
+    for l in range(out_channels):
+        feature_map = np.array([])  # генерация пустой feature-map
+        for i in range(
+            0, matrix.shape[1] - ((filter.shape[2] - 1) * dilation + 1) + 1, stride
+        ):  # (filter.size - 1)*dilation + 1 при delation
+            for j in range(
+                0, matrix.shape[2] - ((filter.shape[3] - 1) * dilation + 1) + 1, stride
+            ):
+                summa = 0
+                for c in range(in_channels):
+                    val = matrix[c][
+                        i : i + (filter.shape[2] - 1) * dilation + 1 : dilation,
+                        j : j + (filter.shape[3] - 1) * dilation + 1 : dilation,
+                    ]
+                    mini_sum = (val * filter[l][c]).sum()
+                    summa = summa + mini_sum
+                feature_map = np.append(feature_map, float(summa + bias_val[l]))  # bias
+        result.append(
+            feature_map.reshape(
+                (matrix.shape[1] - ((filter.shape[2] - 1) * dilation + 1)) // stride
+                + 1,
+                (matrix.shape[2] - ((filter.shape[3] - 1) * dilation + 1)) // stride
+                + 1,
+            )
+        )
+
+    return (
+        np.array(result),
+        torch.tensor(np.array(filter_for_transpose)),
+        torch.tensor(np.array(bias_val)),
+    )
